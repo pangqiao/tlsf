@@ -36,17 +36,6 @@ INCLUDES
 #define ALIGNEMENT                   4
 #define ALIGNEMENT_MSK               (~(ALIGNEMENT-1))
 #define PADD_BYTES                   (ALIGNEMENT - 1)
-#define MB                           (1024*1024)
-
-#define MAX_HEAP_SIZE                8*MB
-
-/* Upto 256 MB Support */
-#if(MAX_HEAP_SIZE > 32*MB)
-#define MAX_FIRST_LIST               23   
-#else
-#define MAX_FIRST_LIST               20     
-#endif
-#define MAX_SECOND_LIST              32
 
 #ifndef TRUE
 #define TRUE    1
@@ -80,42 +69,13 @@ INCLUDES
 #define TLSF_OBTAIN_LOCK()   do{}while(0)
 #define TLSF_RELEASE_LOCK()  do{}while(0)
 
-typedef struct block_header_t block_header_t;
-
-typedef struct block_header_t{
-	int header_magic;
-	int block_size;     
-	int payload_size;
-
-	/*Use them for payload in allocated block*/
-	block_header_t *next;
-	block_header_t *prev;
-
-	/* Tail */
-	int tail_magic;
-	int t_blk_size;
-}block_header_t;
-
-typedef struct tlsf_freelist_t{
-	U32 fl_bitmap;
-	U32 sl_bitmap[MAX_SECOND_LIST];
-	block_header_t *block_table[MAX_FIRST_LIST][MAX_SECOND_LIST];
-}tlsf_freelist_t;
-
-typedef struct tlsf_heap_handler_t{
-	tlsf_freelist_t freelist_t;
-	char *heap_start;
-	char *heap_end;
-	U32 heap_size;
-	U32 heap_alloc_size;
-}tlsf_heap_handler_t;
 
 #define FILL_LEN	8
 static U8 fill_head[FILL_LEN]={0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static U8 fill_tail[FILL_LEN]={0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99};
 
-char MP[MAX_HEAP_SIZE];
-tlsf_heap_handler_t * heap_handle = (tlsf_heap_handler_t *)&MP[0];
+extern char pool[MAX_HEAP_SIZE];
+extern tlsf_heap_handler_t *gp_heap_handle;
 
 static void set_bit(U32 bit, U32 *value)
 {
@@ -385,9 +345,7 @@ void tlsf_trap(Tlsf_ErrStruct *error)
 	}
 }
 
-void *tlsf_alloc(void *handle,
-		U32 size,
-		Tlsf_ErrStruct *error)
+void *tlsf_alloc(void *handle, U32 size, Tlsf_ErrStruct *error)
 {
 	U32 fl_idx = 0;
 	U32 sl_idx = 0;
@@ -468,16 +426,17 @@ alloc_exit:
 }
 
 
-void tlsf_init(void)
+void *tlsf_init_pool(void *pool_start, U32 size)
 {
 	U32 fl_idx = 0;
 	U32 sl_idx = 0;
 	U32 ins_size = 0;
 	block_header_t *insert_block = NULL;
-	U32 size = sizeof(MP);
-	char * mem_start = (char *)&MP[0];
-	char * mem_temp = 0;
+	char *mem_temp = 0;
 
+	char *mem_start = (char *)pool_start;
+	tlsf_heap_handler_t * heap_handle = (tlsf_heap_handler_t *)mem_start;
+	
 	memset(mem_start, 0x00, sizeof(tlsf_heap_handler_t));
 
 	mem_start = mem_start + sizeof(tlsf_heap_handler_t);
@@ -486,8 +445,8 @@ void tlsf_init(void)
 	mem_start = mem_start + sizeof(fill_head);
 	size = size - sizeof(tlsf_heap_handler_t) - sizeof(fill_head);
 
-	heap_handle->heap_start =  mem_start;
-	heap_handle->heap_end = mem_start + size;
+	heap_handle->heap_start =  (char *)mem_start;
+	heap_handle->heap_end = (char *)mem_start + size;
 	heap_handle->heap_size = size;
 	heap_handle->heap_alloc_size = 0;
 
@@ -501,6 +460,7 @@ void tlsf_init(void)
 	insert_blk(&heap_handle->freelist_t, insert_block, fl_idx, sl_idx);
 	TLSF_RELEASE_LOCK();
 	
+	return heap_handle;
 }
 
 void tlsf_free(void *handle,
@@ -567,29 +527,4 @@ free_exit:
 		tlsf_trap(error);
 	}
 }
-
-void *malloc_test(U32 size)
-{
-	Tlsf_ErrStruct tlsf_error;
-	char * ptr = NULL;
-
-	if (!heap_handle){
-		tlsf_init();	
-	}
-	
-	ptr = (char *)tlsf_alloc(heap_handle, size, &tlsf_error);
-	
-	return ptr;
-}
-void free_test(void *mem_ptr){
-	Tlsf_ErrStruct tlsf_error;
-	
-	if (!heap_handle)
-	{
-		tlsf_assert(0);
-	}
-	
-	tlsf_free(heap_handle, mem_ptr,&tlsf_error);
-}
-
 

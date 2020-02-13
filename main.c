@@ -5,26 +5,23 @@ Program execution begins and ends there.*/
 #include <stdio.h>
 #include "tlsf.h"
 
+
+char pool[MAX_HEAP_SIZE];
+tlsf_heap_handler_t *instance;
+
 int main(int argc, char* argv[])
 {
 	Tlsf_ErrStruct tlsf_error;
 	
-	U32 *ptr = NULL;
+	instance = (tlsf_heap_handler_t *)tlsf_init_pool(&pool[0], MAX_HEAP_SIZE);
 
-	tlsf_init();
-
-	ptr = malloc_test(4096);
+	void * data = tlsf_alloc(instance, 4096, &tlsf_error);
 	
-	PRINT_MSG("Malloc:0x%x.\n", (U32)ptr);
-	
-	if (ptr != NULL){
-		free_test(ptr);	
-		PRINT_MSG("Free:0x%x.\n", (U32)ptr);
-		ptr = NULL;
+	if (data != NULL){
+		tlsf_free(instance, data, &tlsf_error);	
+		data = NULL;
 	}
 
-	
 	return 0;
 }
-
 
