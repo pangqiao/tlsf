@@ -11,7 +11,7 @@
 #include "tlsf.h"
 
 char pool[MAX_HEAP_SIZE];
-tlsf_heap_handler_t *instance;
+tlsf_heap_handler_t *handle;
 
 int main(int argc, char* argv[])
 {
