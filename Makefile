@@ -1,9 +1,7 @@
-objects = main.o tlsf.o
-tlsf: $(objects)
+objects := $(patsubst %.c,%.o,$(wildcard *.c))
+tlsf : $(objects)
 	cc -o tlsf $(objects)
-main.o:tlsf.h
-tlsf.o:tlsf.h 
-
+	
 .PHONY:clean	
 clean :
-	rm $(objects)
+	rm tlsf $(objects)
