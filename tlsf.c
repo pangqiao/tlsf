@@ -1,5 +1,3 @@
-
-
 /****************************************************************************
 INCLUDES
 ****************************************************************************/
@@ -76,6 +74,25 @@ static U8 fill_tail[FILL_LEN]={0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99, 0x99};
 
 extern char pool[MAX_HEAP_SIZE];
 extern tlsf_heap_handler_t *gp_heap_handle;
+
+/*0x80000003->0x80000004*/
+#define ALIGNED_ADDR_WITHHEADER(addr, align) 	((addr + align - 1) & (~(align-1)))   
+/*0x80000004-0x80000003 -is 1*/
+#define ALIGNED_ADDR_OFFSET(addr, align)  		(ALIGNED_ADDR_WITHHEADER(addr, align) - addr)
+
+U32 static get_request_size(U32 size)
+{
+	U32 min_block_size = MIN_BLOCK_SIZE(block_header_t);
+	U32 min_payload_size = MIN_PAYLOAD_SIZE(block_header_t);
+	int req_size = 0;
+	
+	if (size < min_payload_size) {
+		req_size = min_block_size;
+	}else{
+		req_size = (size + HEADER_SIZE + TAIL_SIZE + PADD_BYTES ) & ALIGNEMENT_MSK;
+	}
+	return req_size;
+}
 
 static void set_bit(U32 bit, U32 *value)
 {
@@ -258,14 +275,14 @@ static void find_insert_index(U32 req_size,U32 *p_fl,U32 *p_sl)
 	}
 }
 
-static void fill_insert_blk(block_header_t *p_blk_temp,U32 ins_size)
+static void fill_insert_blk(block_header_t *temp_block,U32 ins_size)
 {
 	/* Free block */
-	p_blk_temp->payload_size = 0;  
-	p_blk_temp->block_size   = ins_size;
-	p_blk_temp->header_magic = TLSF_HEADER_CHECK_SUM(p_blk_temp->payload_size,ins_size);
-	*(U32 *)((char *)p_blk_temp + ins_size - TAIL_SIZE) = TAIL_MAGIC;
-	*(U32 *)((char *)p_blk_temp + ins_size - 4) = ins_size;
+	temp_block->payload_size = 0;  
+	temp_block->block_size   = ins_size;
+	temp_block->header_magic = TLSF_HEADER_CHECK_SUM(temp_block->payload_size,ins_size);
+	*(U32 *)((char *)temp_block + ins_size - TAIL_SIZE) = TAIL_MAGIC;
+	*(U32 *)((char *)temp_block + ins_size - 4) = ins_size;
 }
 /*remove the block acorrding to the index, if no suitable block, will try to get the 
 bigger block.*/
@@ -384,9 +401,9 @@ void *tlsf_alloc(void *handle, U32 size, Tlsf_ErrStruct *error)
 	if(ins_size >= min_block_size){
 		insert_block = (block_header_t *)((char *)block+req_size);
 
-		find_insert_index(ins_size,&fl_idx,&sl_idx);
-		fill_insert_blk(insert_block,ins_size);
-		insert_blk(&tlsf_handle->freelist_t,insert_block,fl_idx,sl_idx);
+		find_insert_index(ins_size, &fl_idx, &sl_idx);
+		fill_insert_blk(insert_block, ins_size);
+		insert_blk(&tlsf_handle->freelist_t, insert_block, fl_idx, sl_idx);
 
 		/* Update the block size due to split */
 		block->block_size   = block->block_size - ins_size;
@@ -435,7 +452,7 @@ void *tlsf_init_pool(void *pool_start, U32 size)
 	char *mem_temp = 0;
 
 	char *mem_start = (char *)pool_start;
-	tlsf_heap_handler_t * heap_handle = (tlsf_heap_handler_t *)mem_start;
+	tlsf_heap_handler_t * handle = (tlsf_heap_handler_t *)mem_start;
 	
 	memset(mem_start, 0x00, sizeof(tlsf_heap_handler_t));
 
@@ -445,10 +462,10 @@ void *tlsf_init_pool(void *pool_start, U32 size)
 	mem_start = mem_start + sizeof(fill_head);
 	size = size - sizeof(tlsf_heap_handler_t) - sizeof(fill_head);
 
-	heap_handle->heap_start =  (char *)mem_start;
-	heap_handle->heap_end = (char *)mem_start + size;
-	heap_handle->heap_size = size;
-	heap_handle->heap_alloc_size = 0;
+	handle->heap_start =  (char *)mem_start;
+	handle->heap_end = (char *)mem_start + size;
+	handle->heap_size = size;
+	handle->heap_alloc_size = 0;
 
 	insert_block = (block_header_t*)(void *)(mem_start);
 	ins_size =  size;
@@ -457,10 +474,10 @@ void *tlsf_init_pool(void *pool_start, U32 size)
 	find_insert_index(ins_size, &fl_idx, &sl_idx);
 
 	TLSF_OBTAIN_LOCK();
-	insert_blk(&heap_handle->freelist_t, insert_block, fl_idx, sl_idx);
+	insert_blk(&handle->freelist_t, insert_block, fl_idx, sl_idx);
 	TLSF_RELEASE_LOCK();
 	
-	return heap_handle;
+	return handle;
 }
 
 void tlsf_free(void *handle,
@@ -494,8 +511,8 @@ void tlsf_free(void *handle,
 		find_insert_index(front_merge_size,&fl_idx,&sl_idx);
 
 		remove_from_freelist(&tlsf_handle->freelist_t,
-		p_temp_blk, fl_idx,
-		sl_idx, error);
+			p_temp_blk, fl_idx,
+			sl_idx, error);
 	}
 
 	if(!bit_is_set(FREE_BIT,*(U32 *)((char *)block+(block->block_size & ALIGNEMENT_MSK) + 4))){
@@ -506,7 +523,7 @@ void tlsf_free(void *handle,
 		find_insert_index(back_merge_size,&fl_idx,&sl_idx);
 
 		remove_from_freelist(&tlsf_handle->freelist_t, p_temp_blk,
-		fl_idx, sl_idx, error);
+			fl_idx, sl_idx, error);
 	}
 
 	cur_blk_size = (block->block_size & ALIGNEMENT_MSK);
@@ -527,4 +544,242 @@ free_exit:
 		tlsf_trap(error);
 	}
 }
+
+
+void *tlsf_alloc_aligned(void *handle, 
+		U32 size, 
+		U32 align,
+		Tlsf_ErrStruct *error)
+{
+
+	U32 fl_idx =0;
+	U32 sl_idx =0;
+	U32 temp_size;
+	U32 fnt_size, bak_size, algned_blk_size;
+	block_header_t *temp_block = NULL, *block = NULL;
+	tlsf_heap_handler_t *tlsf_handle = (tlsf_heap_handler_t*)handle;
+
+	U32 req_size = 0;
+
+	error->err_code = TLSF_SUCCESS;
+
+	/* Critical section start */
+	TLSF_OBTAIN_LOCK();
+
+	req_size = get_request_size(size);
+	req_size += align;
+
+	find_alloc_index(req_size, &fl_idx, &sl_idx);
+
+	if(NULL == (block = remove_blk(tlsf_handle, fl_idx, sl_idx, error))){
+		/*error->err_code = TLSF_NO_MEM;*/
+		goto alloc_aligned_exit;
+	}
+
+	algned_blk_size = get_request_size(size);
+	fnt_size = ALIGNED_ADDR_OFFSET((U32)block, align);
+	bak_size = block->block_size - algned_blk_size - fnt_size;
+
+	temp_block = (block_header_t*) ((char *)block + fnt_size);
+
+	if(fnt_size >= MIN_BLOCK_SIZE(block_header_t)){
+		find_insert_index(fnt_size, &fl_idx, &sl_idx);
+		fill_insert_blk(block, fnt_size);
+		insert_blk(&tlsf_handle->freelist_t, block, fl_idx, sl_idx);
+	}else if (fnt_size != 0){
+		/*the prevoius block must be allocated, if the fnt_size too small to
+		insert into the free list block, it should be merged to previous block.*/
+		temp_size = fnt_size + *(U32*)((char *)block - 4);
+		*(U32*)((char*)temp_block - 4) = temp_size;
+		*(U32*)((char*)temp_block - TAIL_SIZE) = TAIL_MAGIC;
+
+		block = (block_header_t *)((char*)temp_block - (temp_size & ALIGNEMENT_MSK));
+		block->block_size = temp_size;
+
+		block->header_magic = TLSF_HEADER_CHECK_SUM(block->payload_size, block->block_size);
+
+		tlsf_handle->heap_alloc_size += fnt_size;
+	}
+
+	if (bak_size >= MIN_BLOCK_SIZE(block_header_t)){
+		block = (block_header_t *)((char *)temp_block + algned_blk_size);
+
+		find_insert_index(bak_size, &fl_idx, &sl_idx);
+		fill_insert_blk(block, bak_size);
+		insert_blk(&tlsf_handle->freelist_t, block, fl_idx, sl_idx);
+
+		temp_block->block_size = algned_blk_size;
+	}else if(bak_size != 0){
+		temp_block->block_size =  (bak_size +  algned_blk_size);
+	}
+
+	temp_block->payload_size = size;
+
+	*(U32*)((char *)temp_block + temp_block->block_size - 4) =  temp_block->block_size;
+	*(U32 *)((char *)temp_block + temp_block->block_size - TAIL_SIZE) = TAIL_MAGIC;
+
+	tlsf_handle->heap_alloc_size += temp_block->block_size;
+
+	/* Set the block as allocated */
+	set_bit(FREE_BIT,(U32 *)((char *)temp_block + temp_block->block_size-4));
+	set_bit(FREE_BIT,&temp_block->block_size);
+
+	temp_block->header_magic = TLSF_HEADER_CHECK_SUM(size, temp_block->block_size);
+
+	/*advanced tail check.*/
+	if((temp_block->block_size & ALIGNEMENT_MSK) > (size + HEADER_SIZE + TAIL_SIZE)){
+		*((char *)temp_block + HEADER_SIZE + size ) = \
+		(TAIL_MAGIC & 0xFF);
+	}
+
+	alloc_aligned_exit:
+
+	if (error->err_code == TLSF_SUCCESS){    
+		TLSF_RELEASE_LOCK();
+		return ((temp_block == NULL)? NULL:(void *) &(temp_block->next));
+	} else if (error->err_code == TLSF_NOT_SUPPORTED){
+		tlsf_trap(error);
+	} else if (error->err_code == TLSF_NO_MEM){	
+		TLSF_RELEASE_LOCK();
+		tlsf_trap(error);
+	}
+}
+
+
+/****************************************************************************************
+* Function   : tlsf_reallocate
+* Description:
+****************************************************************************************/
+void* tlsf_reallocate(void* handle,
+		void *mem_ptr,
+		U32 size,
+		Tlsf_ErrStruct *error)
+{
+	block_header_t *p_blk = (block_header_t *)((char *)mem_ptr - HEADER_SIZE);
+	block_header_t *temp_block = NULL;
+	block_header_t *next_block = NULL;
+	void *p_ret_mem_ptr = 0;
+	U32 req_size = 0,cur_blk_size = 0,ins_size = 0,payload_size = 0;
+	U32 fl_idx = 0;
+	U32 sl_idx = 0;
+
+	error->err_code = TLSF_SUCCESS;
+
+	tlsf_heap_handler_t *tlsf_handle = (tlsf_heap_handler_t*)handle;
+
+	TLSF_OBTAIN_LOCK();
+
+	/* Get the alloc request size */
+	req_size = get_request_size(size);
+	cur_blk_size = (p_blk->block_size & ALIGNEMENT_MSK);
+
+	payload_size = p_blk->payload_size;
+
+	if (req_size <= cur_blk_size){
+		/*In this case, try to split and merge next free block to new free block*/
+		ins_size = cur_blk_size - req_size;
+		next_block = (block_header_t *)((char *)p_blk + cur_blk_size);
+
+		/*1.  Need to see the split block can be merged with next block */
+		if(!bit_is_set(FREE_BIT, next_block->block_size)){
+			/*2. Yes, the next block is free, it need to be merged to a bigger one!*/
+			ins_size += next_block->block_size;
+			find_insert_index(next_block->block_size, &fl_idx, &sl_idx);
+
+			/*3. remove the next_block from the free list first.*/
+			remove_from_freelist(&tlsf_handle->freelist_t,
+				next_block,
+				fl_idx,
+				sl_idx, error);
+		}
+
+		/*4. add the splitted (or next free)block to the free list.*/
+		if(ins_size >= MIN_BLOCK_SIZE(block_header_t)){
+			temp_block = (block_header_t *)((char *)p_blk + req_size);
+
+			find_insert_index(ins_size, &fl_idx, &sl_idx);
+			fill_insert_blk(temp_block, ins_size);
+			insert_blk(&tlsf_handle->freelist_t, temp_block, fl_idx, sl_idx);
+
+			/* Resize the block size */
+			p_blk->block_size = req_size;
+			set_bit(FREE_BIT, &p_blk->block_size);
+			*(U32*)((char*)p_blk + req_size - TAIL_SIZE) = TAIL_MAGIC;
+			*(U32*)((char*)p_blk + req_size - 4) = p_blk->block_size;
+
+			/* this is introduced to send the information */
+			tlsf_handle->heap_alloc_size -= (cur_blk_size - req_size);
+		}
+	}else  {
+		next_block = (block_header_t*)((char*) p_blk + cur_blk_size);
+
+		/*Need allocate new memory as the next blk is allocated or next block
+		memory is not big enough*/
+		if((next_block->block_size & 0x3) ||
+		((cur_blk_size + next_block->block_size) < req_size )){
+			TLSF_RELEASE_LOCK();/*release it before alloc.*/
+
+			/*or tslf_alloc_aligned*/
+			p_ret_mem_ptr = tlsf_alloc(handle, size, error);
+
+			if(p_ret_mem_ptr != NULL){
+				memcpy((char*)p_ret_mem_ptr, mem_ptr, payload_size);
+				tlsf_free(handle, mem_ptr, error);
+			}
+		}else{
+			/* Remove the blk from free list */
+			find_insert_index(next_block->block_size, &fl_idx, &sl_idx);
+			remove_from_freelist(&tlsf_handle->freelist_t, next_block,
+				fl_idx, sl_idx, error);
+			ins_size = cur_blk_size + next_block->block_size - req_size;
+
+			if(ins_size >= MIN_BLOCK_SIZE(block_header_t)){
+				/* need to splitt the block */
+				next_block = (block_header_t*)((char *)p_blk + req_size);
+
+				find_insert_index(ins_size, &fl_idx, &sl_idx);
+				fill_insert_blk(next_block, ins_size);
+				insert_blk(&tlsf_handle->freelist_t, next_block, fl_idx, sl_idx);
+
+				/* resize the block */
+				p_blk->block_size = req_size;
+				set_bit(FREE_BIT, &p_blk->block_size);
+				*(U32*)((char*) p_blk + req_size - TAIL_SIZE) = TAIL_MAGIC;
+				*(U32*)((char*) p_blk + req_size - 4) = p_blk->block_size;
+
+				/* this is introduced to send the information */
+				tlsf_handle->heap_alloc_size += (req_size - cur_blk_size);
+
+			}else{
+				/* this is introduced to send the information */
+				tlsf_handle->heap_alloc_size += next_block->block_size;
+				p_blk->block_size = cur_blk_size + next_block->block_size;
+				*(U32*)((char*) p_blk + p_blk->block_size - TAIL_SIZE) = TAIL_MAGIC;
+				*(U32*)((char*) p_blk + p_blk->block_size - 4) = p_blk->block_size;
+				set_bit(FREE_BIT,(U32*)((char*) p_blk + p_blk->block_size - 4));
+				set_bit(FREE_BIT, &p_blk->block_size);
+			}
+		}
+	}
+
+realloc_exit:
+	if(error->err_code == TLSF_SUCCESS){
+		if(p_ret_mem_ptr == NULL){
+			p_blk->payload_size = size;
+			p_blk->header_magic = TLSF_HEADER_CHECK_SUM(size, p_blk->block_size);
+
+			if((p_blk->block_size & ALIGNEMENT_MSK) > (size + HEADER_SIZE + TAIL_SIZE)){
+				*((char *)p_blk + HEADER_SIZE + size) = \
+				(TAIL_MAGIC & 0xFF);
+			}
+			p_ret_mem_ptr = (void *) &p_blk->next;
+
+			TLSF_RELEASE_LOCK();
+		}
+	}
+
+	return p_ret_mem_ptr;
+}
+
+
 
