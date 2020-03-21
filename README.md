@@ -28,7 +28,10 @@ int main(int argc, char* argv[])
 }
 ```
 # History
-2012/02/212 - v1.0
+2020/03/21 - v1.1
+- Add tlsf_reallocate and tlsf_alloc_aligned
+
+2020/02/21 - v1.0
 - First release
 
 # Reference
