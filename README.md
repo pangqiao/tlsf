@@ -28,6 +28,11 @@ int main(int argc, char* argv[])
 }
 ```
 # History
+2020/12/29 - v2.0
+- Optimize find_alloc_index;
+- Fix bug: add fill_head and fill_tail and marked with allocated
+   to avoid the block_merge_next or block_merge_prev out of heap range.
+
 2020/03/21 - v1.1
 - Add tlsf_reallocate and tlsf_alloc_aligned
 
